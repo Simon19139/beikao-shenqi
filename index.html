@@ -43,6 +43,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 .q-tag.done-tag{background:#e9d8fd;color:#553c9a}
 .q-content{font-size:15px;margin-bottom:12px;line-height:1.7}
 .options{display:flex;flex-direction:column;gap:8px}
+.option-btn.selected{background:#ebf8ff;border-color:#3182ce;color:#2b6cb0}
 .option-btn{display:flex;align-items:flex-start;gap:8px;padding:10px 12px;border:1.5px solid var(--border);border-radius:8px;background:var(--card);cursor:pointer;font-size:14px;text-align:left;transition:all .15s}
 .option-btn:active{transform:scale(.98)}
 .option-btn .letter{min-width:22px;height:22px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:600;font-size:12px;background:#edf2f7;color:var(--text);flex-shrink:0}
@@ -221,7 +222,7 @@ let currentBankId = localStorage.getItem('qbank_current_bank') || 'cy';
 
 function switchBank(bankId) {
   if (!BANKS[bankId]) return;
-  currentBankId = bankId;
+  currentBankId = bankId; _cachedQs = null;
   localStorage.setItem('qbank_current_bank', bankId);
   // Re-init Q object
   Q.data = BANKS[currentBankId].data;
@@ -398,6 +399,8 @@ let pFilter = { module: state.lastModule, type: state.lastType };
 let pIdx = state.lastIdx;
 let pAnswered = false;
 let pUserAns = null;
+let _cachedQs = null; // cached filtered question list
+let _pendingAnswerRefresh = false;
 let examMode = false, examQuestions = [], examIdx = 0, examAnswers = {}, examTimer = null, examTime = 5400, examSubmitted = false;
 // 错题重刷模式
 let redoWrongMode = false;
@@ -569,6 +572,12 @@ function getFilteredQuestions() {
 
 function renderPractice() {
   if (redoWrongMode) { renderRedoWrong(); return; }
+  // Rebuild question list only if not in the middle of answering
+  // or if filter changed
+  if (!_cachedQs || !_pendingAnswerRefresh) {
+    _cachedQs = getFilteredQuestions();
+  }
+  _pendingAnswerRefresh = false;
   const modules = ['all', ...new Set(Q.data.map(q => q.m))];
   const isLocked = !isUnlocked();
   var typeOptions = [{v:'all',l:'全部'},{v:'j',l:'判断'}];
@@ -580,7 +589,7 @@ function renderPractice() {
     pFilter.type = 'j';
   }
   // 统计筛选后的已做/未做
-  const qs = getFilteredQuestions();
+  const qs = _cachedQs;
   const doneInFilter = qs.filter(q => state.done.includes(q.id)).length;
   const notDoneInFilter = qs.length - doneInFilter;
   let html = `<div class="filter-bar">`;
@@ -608,17 +617,17 @@ function renderPractice() {
     if (pIdx >= qs.length) pIdx = 0;
     html += renderQuestionCard(qs[pIdx], pIdx, qs.length, false);
     html += `<div class="nav-row">
-      <button class="nav-btn" ${pIdx===0?'disabled':''} onclick="pIdx--;pAnswered=false;pUserAns=null;renderPractice()">上一题</button>
+      <button class="nav-btn" ${pIdx===0?'disabled':''} onclick="pIdx--;pAnswered=false;pUserAns=null;_cachedQs=null;renderPractice()">上一题</button>
       <span class="nav-counter">${pIdx+1}/${qs.length}${state.done.includes(qs[pIdx].id)?' ✅已做':''}</span>
-      <button class="nav-btn" ${pIdx>=qs.length-1?'disabled':''} onclick="pIdx++;pAnswered=false;pUserAns=null;renderPractice()">下一题</button>
+      <button class="nav-btn" ${pIdx>=qs.length-1?'disabled':''} onclick="pIdx++;pAnswered=false;pUserAns=null;_cachedQs=null;renderPractice()">下一题</button>
     </div>`;
   }
   document.getElementById('practiceContent').innerHTML = html;
 }
 
 let _showDoneFilter = null; // null=全部, 'undone'=未做, 'done'=已做
-function filterUndone() { _showDoneFilter = 'undone'; pIdx = 0; pAnswered = false; pUserAns = null; renderPractice(); }
-function filterDone() { _showDoneFilter = 'done'; pIdx = 0; pAnswered = false; pUserAns = null; renderPractice(); }
+function filterUndone() { _showDoneFilter = 'undone'; _cachedQs = null; pIdx = 0; pAnswered = false; pUserAns = null; renderPractice(); }
+function filterDone() { _showDoneFilter = 'done'; _cachedQs = null; pIdx = 0; pAnswered = false; pUserAns = null; renderPractice(); }
 
 // 重写getFilteredQuestions支持已做/未做筛选
 const _origGetFiltered = getFilteredQuestions;
@@ -632,6 +641,7 @@ getFilteredQuestions = function() {
 function setFilter(key, val) {
   pFilter[key] = val;
   _showDoneFilter = null;
+  _cachedQs = null;
   pIdx = 0;
   pAnswered = false;
   pUserAns = null;
@@ -665,11 +675,12 @@ function renderQuestionCard(q, idx, total, isRedo) {
     html += `<div class="options">`;
     const ansLetters = q.a ? q.a.split('') : [];
     q.o.forEach(opt => {
-      const sel = answered && userAns && userAns.includes(opt[0]);
+      const sel = userAns && userAns.includes(opt[0]);
       const isCor = q.a && ansLetters.includes(opt[0]);
       let cls = 'option-btn';
       if (answered && sel) cls += isCor ? ' correct' : ' wrong';
       else if (answered && isCor && !sel && q.t === 's') cls += ' correct';
+      else if (!answered && sel && q.t === 'm') cls += ' selected';
       html += `<button class="${cls}" onclick="${isRedo?'redoWrongOpt':'answerOption'}(${q.id},'${opt[0]}')">
         <span class="letter">${opt[0]}</span><span>${opt[1]}</span>
       </button>`;
@@ -734,6 +745,8 @@ function answerJudge(qId, ans) {
   pAnswered = true;
   pUserAns = ans;
   recordAnswer(qId, ans);
+  // Don't re-filter after answering to prevent question jumping
+  _pendingAnswerRefresh = true;
   renderPractice();
 }
 
@@ -757,6 +770,7 @@ function submitMulti(qId) {
   if (pAnswered || !pUserAns) return;
   pAnswered = true;
   recordAnswer(qId, pUserAns);
+  _pendingAnswerRefresh = true;
   renderPractice();
 }
 
@@ -1034,6 +1048,22 @@ function closeKeyModal() {
 }
 
 // === 错题本 ===
+function renderWrongOptions(q, rec) {
+  if (!q.o || q.o.length === 0) return '';
+  var html = '<div class="options" style="pointer-events:none">';
+  q.o.forEach(function(opt) {
+    var isUser = rec && rec.ua && rec.ua.includes(opt[0]);
+    var isCor = q.a && q.a.includes(opt[0]);
+    var cls = 'option-btn';
+    if (isUser && isCor) cls += ' correct';
+    else if (isUser && !isCor) cls += ' wrong';
+    else if (isCor && !isUser) cls += ' correct';
+    html += '<button class="' + cls + '"><span class="letter">' + opt[0] + '</span><span>' + opt[1] + '</span></button>';
+  });
+  html += '</div>';
+  return html;
+}
+
 function renderWrong() {
   if (!isUnlocked()) {
     renderLockScreen('wrongContent', '错题本');
@@ -1059,6 +1089,7 @@ function renderWrong() {
         ${q.s?'<span class="q-tag verified">✅ 标准</span>':'<span class="q-tag ai">📋 参考</span>'}
       </div>
       <div class="q-content">${i+1}. ${q.c}</div>
+      ${renderWrongOptions(q, rec)}
       <div class="answer-reveal" style="background:#fff5f5;border-color:#fed7d7">
         ${rec?`你的答案：<b style="color:var(--error)">${rec.ua}</b>`:'未记录'} | 正确答案：<b style="color:var(--success)">${q.a}</b>
       </div>
