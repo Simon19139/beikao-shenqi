@@ -617,9 +617,9 @@ function renderPractice() {
     if (pIdx >= qs.length) pIdx = 0;
     html += renderQuestionCard(qs[pIdx], pIdx, qs.length, false);
     html += `<div class="nav-row">
-      <button class="nav-btn" ${pIdx===0?'disabled':''} onclick="pIdx--;pAnswered=false;pUserAns=null;_cachedQs=null;renderPractice()">上一题</button>
+      <button class="nav-btn" ${pIdx===0?'disabled':''} onclick="navPractice(-1)">上一题</button>
       <span class="nav-counter">${pIdx+1}/${qs.length}${state.done.includes(qs[pIdx].id)?' ✅已做':''}</span>
-      <button class="nav-btn" ${pIdx>=qs.length-1?'disabled':''} onclick="pIdx++;pAnswered=false;pUserAns=null;_cachedQs=null;renderPractice()">下一题</button>
+      <button class="nav-btn" ${pIdx>=qs.length-1?'disabled':''} onclick="navPractice(1)">下一题</button>
     </div>`;
   }
   document.getElementById('practiceContent').innerHTML = html;
@@ -649,6 +649,32 @@ function setFilter(key, val) {
   state.lastType = pFilter.type;
   state.lastIdx = 0;
   saveLS(state);
+  renderPractice();
+}
+
+// 安全导航：基于题目ID定位，防止筛选变化后跳题
+function navPractice(direction) {
+  const curQ = _cachedQs ? _cachedQs[pIdx] : null;
+  pAnswered = false;
+  pUserAns = null;
+  _cachedQs = null;
+  const newQs = getFilteredQuestions();
+  _cachedQs = newQs;
+  if (newQs.length === 0) { renderPractice(); return; }
+  if (curQ) {
+    const curIdx = newQs.findIndex(q => q.id === curQ.id);
+    if (direction === 1) {
+      // 下一题：当前题还在列表里就+1，否则当前pIdx就是下一题
+      if (curIdx >= 0) pIdx = Math.min(curIdx + 1, newQs.length - 1);
+      else pIdx = Math.min(pIdx, newQs.length - 1);
+    } else {
+      // 上一题：当前题还在列表里就-1，否则当前pIdx-1
+      if (curIdx >= 0) pIdx = Math.max(curIdx - 1, 0);
+      else pIdx = Math.max(pIdx - 1, 0);
+    }
+  } else {
+    pIdx = direction === 1 ? Math.min(pIdx + 1, newQs.length - 1) : Math.max(pIdx - 1, 0);
+  }
   renderPractice();
 }
 
@@ -757,6 +783,7 @@ function answerOption(qId, letter) {
     pAnswered = true;
     pUserAns = letter;
     recordAnswer(qId, letter);
+    _pendingAnswerRefresh = true; // 防止答题后重建列表导致跳题
   } else {
     if (!pUserAns) pUserAns = '';
     if (pUserAns.includes(letter)) pUserAns = pUserAns.replace(letter, '');
